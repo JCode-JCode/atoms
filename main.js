@@ -470,79 +470,66 @@ function sampleDOrbital(n, ml) {
 }
 
 /**
+ * Real f-orbital angular functions on the unit sphere
+ * (Y is the vertical axis in this scene).
+ * Returns the un-normalized angular amplitude for the given ml.
+ */
+function fAngularRaw(ml, x, y, z) {
+    switch (ml) {
+        case 0:  return y * (5 * y * y - 3);          // fz³
+        case 1:  return x * (5 * y * y - 1);          // fxz²
+        case -1: return z * (5 * y * y - 1);          // fyz²
+        case 2:  return x * y * z;                    // fxyz
+        case -2: return y * (x * x - z * z);          // fz(x²-y²)
+        case 3:  return x * (x * x - 3 * z * z);      // fx(x²-3y²)
+        case -3: return z * (3 * x * x - z * z);      // fy(3x²-y²)
+        default: return 1;
+    }
+}
+
+// Cache of the maximum |angular|² per ml, computed once by random scan
+const F_ANGULAR_MAX = {};
+function fAngularMax(ml) {
+    if (F_ANGULAR_MAX[ml] !== undefined) return F_ANGULAR_MAX[ml];
+    let max = 0;
+    for (let i = 0; i < 20000; i++) {
+        const cosT = 2 * Math.random() - 1;
+        const sinT = Math.sqrt(1 - cosT * cosT);
+        const phi = Math.random() * 2 * Math.PI;
+        const v = fAngularRaw(ml, sinT * Math.cos(phi), cosT, sinT * Math.sin(phi));
+        if (v * v > max) max = v * v;
+    }
+    F_ANGULAR_MAX[ml] = (max * 1.02) || 1; // small safety margin
+    return F_ANGULAR_MAX[ml];
+}
+
+/**
  * Sample a position from an f-orbital (l=3).
  * 7 orientations with multi-lobed character.
- * Uses simplified but faithful angular patterns.
+ * Uses real spherical harmonics, normalized by each orbital's own maximum,
+ * so rejection sampling accepts at a healthy rate and never needs the old
+ * "put the particle on the Y axis" fallback (which drew a bright white line).
  */
 function sampleFOrbital(n, ml) {
     const { r, radialDensity } = sampleRadius(n, 3);
+    const maxVal = fAngularMax(ml);
 
-    let x, y, z;
-    let angularVal = 0;
-    let accepted = false;
-    for (let i = 0; i < 500; i++) {
-        const phi = Math.random() * 2 * Math.PI;
+    let x = 0, y = 1, z = 0, ratio = 0;
+    for (let i = 0; i < 5000; i++) {
         const cosT = 2 * Math.random() - 1;
         const sinT = Math.sqrt(1 - cosT * cosT);
+        const phi = Math.random() * 2 * Math.PI;
         x = sinT * Math.cos(phi);
         y = cosT;
         z = sinT * Math.sin(phi);
-
-        const sin2T = sinT * sinT;
-        const cos2T = cosT * cosT;
-
-        // 7 distinct f-orbital angular patterns
-        switch (ml) {
-            case 0: // fz³: cosθ(5cos²θ - 3)
-                angularVal = Math.pow(y * (5 * cos2T - 3), 2) * 0.1;
-                break;
-            case 1: { // fxz²: sinθ·(5cos²θ - 1)·cosφ
-                const cosPhi = Math.cos(phi);
-                angularVal = sin2T * Math.pow(5 * cos2T - 1, 2) * cosPhi * cosPhi * 0.08;
-                break;
-            }
-            case -1: { // fyz²: sinθ·(5cos²θ - 1)·sinφ
-                const sinPhi = Math.sin(phi);
-                angularVal = sin2T * Math.pow(5 * cos2T - 1, 2) * sinPhi * sinPhi * 0.08;
-                break;
-            }
-            case 2: { // fxyz: sin²θ·cosθ·sin2φ
-                const sin2Phi = Math.sin(2 * phi);
-                angularVal = sin2T * sin2T * cos2T * sin2Phi * sin2Phi * 2;
-                break;
-            }
-            case -2: { // fz(x²-y²): sin²θ·cosθ·cos2φ
-                const cos2Phi = Math.cos(2 * phi);
-                angularVal = sin2T * sin2T * cos2T * cos2Phi * cos2Phi * 2;
-                break;
-            }
-            case 3: { // fx(x²-3y²): sin³θ·cos3φ
-                const cos3Phi = Math.cos(3 * phi);
-                angularVal = sin2T * sin2T * sin2T * cos3Phi * cos3Phi;
-                break;
-            }
-            case -3: { // fy(3x²-y²): sin³θ·sin3φ
-                const sin3Phi = Math.sin(3 * phi);
-                angularVal = sin2T * sin2T * sin2T * sin3Phi * sin3Phi;
-                break;
-            }
-            default:
-                angularVal = 0.5;
-        }
-        // Raise to power 2.0 for crisp multi-lobed shapes
-        const angularProb = Math.min(Math.pow(angularVal, 2.0), 1);
-        if (Math.random() < angularProb) { accepted = true; break; }
-    }
-    // Fallback: place along Y axis (common lobe direction for f-orbitals)
-    if (!accepted) {
-        const sign = Math.random() < 0.5 ? 1 : -1;
-        x = 0; y = sign; z = 0;
-        angularVal = 0.7;
+        const v = fAngularRaw(ml, x, y, z);
+        ratio = (v * v) / maxVal;                          // 0..1
+        if (Math.random() < Math.pow(ratio, 1.5)) break;   // 1.5 keeps lobes crisp
     }
 
     return {
         pos: new THREE.Vector3(x * r, y * r, z * r),
-        density: radialDensity * angularVal
+        density: radialDensity * ratio
     };
 }
 
